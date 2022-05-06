@@ -1,0 +1,282 @@
+import fs as fs
+from fyers_api import fyersModel
+from fyers_api import accessToken
+
+
+import datetime
+import time
+import document_file
+import pandas as pd
+import pandas_ta as pt
+import numpy as np
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+
+log_path = document_file.log_path
+client_id = document_file.client_id
+secret_key = document_file.secret_key
+redirect_url = document_file.redirect_url
+response_type = document_file.response_type
+grant_type = document_file.grant_type
+username = document_file.username
+password = document_file.password
+pin1 = document_file.pin1
+pin2 = document_file.pin2
+pin3 = document_file.pin3
+pin4 = document_file.pin4
+
+temp_script = ["TVSMOTOR-EQ", "HEROMOTOCO-EQ", "TATAPOWER-EQ", "SBILIFE-EQ", "SUNTV-EQ", "TATAMOTORS-EQ", "TCS-EQ""M&M-EQ", "TATAMOTORS-EQ", "GRANULES-EQ",
+               "GRANULES-EQ", "BHARTIARTL-EQ", "SBILIFE-EQ", "HEROMOTOCO-EQ", "BHARTIARTL-EQ", "TVSMOTOR-EQ","M&M-EQ", "GRANULES-EQ", "HCLTECH-EQ", "ICICIBANK-EQ", "BANDHANBNK-EQ"]
+script_list = ["GRANULES-EQ"]
+exchange = "NSE"
+timeframe = "5"
+from_date = "2022-04-20"
+today = datetime.datetime.now().strftime('%Y-%m-%d')
+rsi_overbought = 70
+rsi_oversold = 30
+buy_traded_stock = []
+sell_traded_stock = []
+ma_short = 9
+ma_long = 26
+
+
+def getTime():
+    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def placeOrder(script, order, lp):
+    fund = fyers.funds()
+    av_bal = fund['fund_limit'][9]['equityAmount']
+    quantity = int(av_bal / lp * 5)
+    target = lp * 0.4 / 100
+    loss = lp * 0.2 / 100
+
+    if order == "BUY":
+        order = fyers.place_order(
+            {"symbol": f"{exchange}:{script}", "qty": quantity, "type": "2", "side": "1", "productType": "BO",
+             "limitPrice": "0",
+             "stopPrice": "0", "disclosedQty": "0", "validity": "DAY", "offlineOrder": "False", "stopLoss": loss,
+             "takeProfit": target})
+        if order['s'] == 'ok':
+            print(f"OK, Order Placed :: {script} - {quantity} BROUGHT at {getTime()}")
+            trade = True
+            while trade:
+                pos = fyers.positions()
+                if pos['overall']['count_open'] == 0:
+                    trade = False
+                print("---------- P&L :", pos['overall']['pl_unrealized'], "-----------")
+                print("----------------------------------------------------------------")
+                print("----------Total P&L :", pos['overall']['pl_total'], "-----------")
+                print("----------------------------------------------------------------")
+                time.sleep(1)
+            print("Position Exited.........")
+    else:
+        order = fyers.place_order(
+            {"symbol": f"{exchange}:{script}", "qty": quantity, "type": "2", "side": "-1", "productType": "BO",
+             "limitPrice": "0",
+             "stopPrice": "0", "disclosedQty": "0", "validity": "DAY", "offlineOrder": "False", "stopLoss": loss,
+             "takeProfit": target})
+        if order['s'] == 'ok':
+            print(f"OK, Order Placed :: {script} - {quantity} SOLD at {getTime()}")
+            trade = True
+            while trade:
+                pos = fyers.positions()
+                if pos['overall']['count_open'] == 0:
+                    trade = False
+                print("---------- P&L :", pos['overall']['pl_unrealized'], "-----------")
+                print("----------------------------------------------------------------")
+                print("----------Total P&L :", pos['overall']['pl_total'], "-----------")
+                print("----------------------------------------------------------------")
+                time.sleep(1)
+            print("Position Exited.........")
+    print(order)
+    return input("Continue Trade ?(0/1)")
+
+
+def maAlgorithm():
+    scripts = ''
+    for script in script_list:
+        scripts = scripts + "NSE:" + script + ","
+    lp_res = fyers.quotes({'symbols': scripts[:-1]})
+    lp_counter = 0
+    ct = '1'
+
+    for script in script_list:
+        data = {"symbol": f"{exchange}:{script}", "resolution": timeframe, "date_format": "1", "range_from": from_date,
+                "range_to": today, "cont_flag": "0"}
+
+        try:
+            hist_data = fyers.history(data)
+        except Exception as e:
+            raise e
+        lp = lp_res['d'][lp_counter]['v']['lp']
+        df = pd.DataFrame(hist_data["candles"], columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        df['date'] = pd.to_datetime(df['date'], unit="s", utc=True)
+        df['date'] = df['date'].dt.tz_convert('Asia/Kolkata')
+        df['rsi'] = pt.rsi(df['close'], length=14).round(2)
+        df['ema_volume'] = pt.ema(df['volume'], 20).round(2)
+        df['ma_20'] = pt.sma(df['close'], 20).round(2)
+        df['ma_short'] = df['close'].rolling(window=ma_short).mean()
+        df['ma_long'] = df['close'].rolling(window=ma_long).mean()
+        print(df)
+        # df.ma_short.values[-1] = ((df.ma_short.values[-1] * ma_short) + lp) / (ma_short + 1)
+        # df.ma_long.values[-1] = (df.ma_long.values[-1] + lp) / 2
+
+        df.dropna(inplace=True)
+
+
+        if not df.empty:
+
+
+            print("::", script, "::", lp, df.close.values[-1], end=" ::")
+            lp_counter = lp_counter + 1
+            ev = False
+            ma20 = False
+            emacross = False
+            rsi = False
+            side = ''
+
+
+
+            vol = df.volume.values[-1]
+            if df.ema_volume.values[-1] < vol:
+                ev = True
+
+            if (df.ma_short.values[-1] < df.ma_long.values[-1]) and (
+                    df.ma_short.values[-2] >= df.ma_long.values[-2]):
+                side = 'SELL'
+                emacross = True
+
+                print()
+                print("-------------------------------------------------------------------------------------------")
+                print(f"---------------- EMA CrossOver for SELL : {script} at {lp} : PASSED-------------------")
+                if df.ma_20.values[-1] > lp:
+                    print(
+                        f"---------------- 20 MA Below Average   : {lp - df.ma_20.values[-1]} : PASSED------------------------")
+                    ma20 = True
+                else:
+                    print(
+                        f"---------------- 20 MA Above Average   : {lp - df.ma_20.values[-1]} : FAILED-------------------------")
+                if ev:
+                    print(
+                        f"---------------- Volume Above Average : {vol - df.ema_volume.values[-1]} : PASSED------------------------------------")
+                else:
+                    print(
+                        f"---------------- Volume Below Average : {vol - df.ema_volume.values[-1]} : FAILED------------------------------------")
+
+                if df.rsi.values[-1] > rsi_overbought:
+                    rsi = True
+                    print(
+                        f"---------------- RSI Overbought : {df.rsi.values[-1]} : PASSED------------------------------------")
+                else:
+                    print(
+                        f"---------------- RSI Value      : {df.rsi.values[-1]} : FAILED------------------------------------")
+                print("-------------------------------------------------------------------------------------------")
+            else:
+                print("ema diff : ",df.ma_short.values[-1] - df.ma_long.values[-1])
+            vol = df.volume.values[-1]
+
+            if (df.ma_short.values[-1] > df.ma_long.values[-1]) and (
+                    df.ma_short.values[-2] <= df.ma_long.values[-2]):
+                print()
+                side = 'BUY'
+                emacross = True
+                print("-------------------------------------------------------------------------------------------")
+                print(f"---------------- EMA CrossOver for BUY  : {script} at {lp} : PASSED-------------------")
+                if df.ma_20.values[-1] < lp:
+                    print(
+                        f"---------------- 20 MA Below Average   : {(lp - df.ma_20.values[-1])} : PASSED----------------------")
+                    ma20 = True
+                else:
+                    print(
+                        f"---------------- 20 MA Above Average   : {(lp - df.ma_20.values[-1])} : FAILED--------------------")
+                if ev:
+                    print(
+                        f"---------------- Volume Above Average : {vol - df.ema_volume.values[-1]} : PASSED------------------------------------")
+                else:
+                    print(
+                        f"---------------- Volume Below Average : {vol - df.ema_volume.values[-1]} : FAILED------------------------------------")
+                if df.rsi.values[-1] < rsi_oversold:
+                    rsa = True
+                    print(
+                        f"---------------- RSI OverSold   : {df.rsi.values[-1]} : PASSED------------------------------------")
+                else:
+                    print(
+                        f"---------------- RSI Value      : {df.rsi.values[-1]} : FAILED------------------------------------")
+                print("-------------------------------------------------------------------------------------------")
+
+            if ev and emacross and ma20 and rsi:
+                print("order trigger")
+                # ct = placeOrder(script, side, lp)
+            time.sleep(0.5)
+    print()
+    return ct
+
+
+
+def generate_auth_token():
+    url = f"https://api.fyers.in/api/v2/generate-authcode?client_id={client_id}&redirect_uri=https%3A%2F%2Fmyapi.fyers.in%2Fdocs%2F&response_type=code&state=private&nonce=private"
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+    driver.get(url)
+    time.sleep(3)
+    driver.execute_script(f"document.querySelector('[id=fy_client_id]').value = '{username}'")
+    driver.execute_script(f"document.querySelector('[id=clientIdSubmit]').click()")
+    time.sleep(3)
+    driver.execute_script(f"document.querySelector('[id=fy_client_pwd]').value = '{password}'")
+    driver.execute_script(f"document.querySelector('[id=loginSubmit]').click()")
+    time.sleep(3)
+    driver.find_element(By.ID, "verify-pin-page").find_element(By.ID, "first").send_keys(pin1)
+    driver.find_element(By.ID, "verify-pin-page").find_element(By.ID, "second").send_keys(pin2)
+    driver.find_element(By.ID, "verify-pin-page").find_element(By.ID, "third").send_keys(pin3)
+    driver.find_element(By.ID, "verify-pin-page").find_element(By.ID, "fourth").send_keys(pin4)
+    driver.execute_script(f"document.querySelector('[id=verifyPinSubmit]').click()")
+    time.sleep(3)
+    new_url = driver.current_url
+    auth_code = new_url[new_url.index('auth_code=') + 10:new_url.index('&state')]
+
+    driver.quit()
+    return auth_code
+
+
+def generate_access_token(auth, app, secret):
+    appSession = accessToken.SessionModel(client_id=app, secret_key=secret, grant_type='authorization_code')
+    appSession.set_token(auth)
+    response = appSession.generate_token()['access_token']
+    f = open("token.txt", "w")
+    f.write(response)
+    f.close()
+    return response
+
+
+def main():
+    global fyers
+    cont_trade = '1'
+    access_token = open('token.txt', 'r').read()
+    fyers = fyersModel.FyersModel(token=access_token, log_path=log_path, client_id=client_id)
+    fyers.token = access_token
+    profile = fyers.get_profile()
+    if profile['s'] != 'ok':
+        auth_token = generate_auth_token()
+        access_token = generate_access_token(auth_token, client_id, secret_key)
+        fyers = fyersModel.FyersModel(token=access_token, log_path=log_path, client_id=client_id)
+
+    closing_time = int(15) * 60 + int(10)
+    order_place_time = int(9) * 60 + int(20)
+    time_now = (datetime.datetime.now().hour * 60 + datetime.datetime.now().minute)
+
+    print(f"Waiting for 9.20 AM, Time Now:{getTime()}")
+
+    while time_now < order_place_time:
+        time.sleep(0.2)
+        time_now = (datetime.datetime.now().hour * 60 + datetime.datetime.now().minute)
+
+    print(f"Ready for trading, Time Now:{getTime()}")
+
+    # while time_now < closing_time and cont_trade == '1':
+    #     cont_trade = maAlgorithm()
+
+
+if __name__ == "__main__":
+    main()
